@@ -1,0 +1,41 @@
+{
+  "name": "ocpp-proxy-alert",
+  "version": "1.0.0",
+  "description": "A 1 or 2 way ocpp proxy with alert system on ChargePoint events",
+  "keywords": [
+    "ocpp",
+    "proxy",
+    "websocket",
+    "charging-point",
+    "alert",
+    "alarm"
+  ],
+  "homepage": "https://github.com/WoCha-FR/ocpp-proxy-alert#readme",
+  "bugs": {
+    "url": "https://github.com/WoCha-FR/ocpp-proxy-alert/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WoCha-FR/ocpp-proxy-alert.git"
+  },
+  "license": "GPL-3.0-only",
+  "author": "WoCha",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "lint": "eslint .",
+    "prettier": "prettier . --check",
+    "fixlint": "eslint --fix .",
+    "fixprettier": "prettier . --write",
+    "test": "node --watch src/index.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@eslint/json": "^1.0.1",
+    "@eslint/markdown": "^7.5.1",
+    "eslint": "^10.0.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.3.0",
+    "prettier": "3.8.1"
+  }
+}
