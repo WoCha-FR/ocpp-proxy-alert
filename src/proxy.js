@@ -97,9 +97,15 @@ class OcppProxy {
     // Create router for this client
     const router = new OcppRouter(clientId)
 
+    // Determine the real client IP (support X-Forwarded-For if proxy is behind another proxy)
+    const clientIp = (request.headers['x-forwarded-for'] || '').split(',')[0].trim()
+      || request.socket.remoteAddress
+
+    clog.debug(`Client IP: ${clientIp}`)
+
     // Create upstream connections
     const upstreams = this.config.upstreams.map((upstreamConfig) => {
-      const upstream = new UpstreamConnection(upstreamConfig.name, upstreamConfig.url, clientId, protocol)
+      const upstream = new UpstreamConnection(upstreamConfig.name, upstreamConfig.url, clientId, protocol, clientIp)
       return upstream
     })
 
