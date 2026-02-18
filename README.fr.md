@@ -52,7 +52,7 @@ ou par [déploiement Docker](./DOCKER.fr.md)
 
 ### Connexion client
 
-Le client doit se connecter sur un chemin de la forme `ws://<host>:<port>/<clientId>` où `<clientId>` est une chaîne alphanumérique (lettres, chiffres, underscore). Toute connexion avec un chemin invalide est rejetée immédiatement.
+Le client doit se connecter sur un chemin de la forme `ws://<host>:<port>/<clientId>` où `<clientId>` est une chaîne alphanumérique (lettres, chiffres, underscore, tiret). Toute connexion avec un chemin invalide est rejetée immédiatement.
 
 Le proxy établit ensuite une connexion upstream à `<primaryUrl><clientId>` (et `<secondaryUrl><clientId>` si configuré).
 

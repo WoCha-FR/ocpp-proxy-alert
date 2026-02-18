@@ -63,10 +63,10 @@ class OcppProxy {
   handleClientConnection(clientWs, request) {
     const rawPath = request.url || '/'
     // Extract single-level alphanumeric path (strip leading slashes and extra segments)
-    const match = rawPath.replace(/^\/+/, '').match(/^([a-zA-Z0-9_]+)/)
+    const match = rawPath.replace(/^\/+/, '').match(/^([a-zA-Z0-9_-]+)$/)
     if (!match) {
-      log.warn(`Rejected client connection: invalid path "${rawPath}" (must be single-level alphanumeric or underscore)`)
-      clientWs.close(1008, 'Invalid path: must be single-level alphanumeric or underscore')
+      log.warn(`Rejected client connection: invalid path "${rawPath}" (must be single-level alphanumeric, underscore, or hyphen)`)
+      clientWs.close(1008, 'Invalid path: must be single-level alphanumeric, underscore, or hyphen')
       return
     }
     const clientId = match[1]

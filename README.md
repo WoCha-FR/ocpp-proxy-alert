@@ -52,7 +52,7 @@ or by [Docker deployment](./DOCKER.md)
 
 ### Client connection
 
-The client must connect to a path of the form `ws://<host>:<port>/<clientId>` where `<clientId>` is an alphanumeric string (letters, digits, underscores). Any connection with an invalid path is rejected immediately.
+The client must connect to a path of the form `ws://<host>:<port>/<clientId>` where `<clientId>` is an alphanumeric string (letters, digits, underscores, hyphen). Any connection with an invalid path is rejected immediately.
 
 The proxy then opens an upstream connection to `<primaryUrl><clientId>` (and `<secondaryUrl><clientId>` if configured).
 
