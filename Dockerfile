@@ -37,13 +37,17 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 RUN addgroup -S ocpp && adduser -S ocpp -G ocpp \
     && chown -R ocpp:ocpp /app
 
-# Répertoire de configuration monté en volume (propriété ocpp)
+# su-exec pour basculer vers l'utilisateur ocpp après l'entrypoint
+RUN apk add --no-cache su-exec
+
+# Répertoire de configuration monté en volume
 RUN mkdir -p /config && chown ocpp:ocpp /config
 VOLUME ["/config"]
 
 EXPOSE 9000
 
-USER ocpp
+# L'entrypoint s'exécute en root pour gérer les permissions,
+# puis bascule vers ocpp via su-exec (voir docker-entrypoint.sh)
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "src/index.js"]
