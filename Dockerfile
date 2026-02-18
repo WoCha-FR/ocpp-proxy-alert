@@ -33,14 +33,16 @@ RUN ln -s /config ./config
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Répertoire de configuration monté en volume
+# Utilisateur non-root pour la sécurité
+RUN addgroup -S ocpp && adduser -S ocpp -G ocpp \
+    && chown -R ocpp:ocpp /app
+
+# Répertoire de configuration monté en volume (propriété ocpp)
+RUN mkdir -p /config && chown ocpp:ocpp /config
 VOLUME ["/config"]
 
 EXPOSE 9000
 
-# Utilisateur non-root pour la sécurité
-RUN addgroup -S ocpp && adduser -S ocpp -G ocpp \
-    && chown -R ocpp:ocpp /app
 USER ocpp
 
 ENTRYPOINT ["docker-entrypoint.sh"]

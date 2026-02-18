@@ -1,0 +1,35 @@
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy
+
+  ocpp-proxy-alert:
+    image: ghcr.io/wocha-fr/ocpp-proxy-alert:dev
+    container_name: ocpp-proxy-alert
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Paris
+    volumes:
+      - /opt/ocpp-proxy-alert/config:/config
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ocpp.entrypoints=web
+      - traefik.http.routers.ocpp.rule=PathPrefix(`/`)
+      - traefik.http.services.ocpp.loadbalancer.server.port=9000
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    driver: bridge
