@@ -1,0 +1,26 @@
+{
+  "logLevel": "info",
+  "primaryUrl": "ws://ws1.ocpp.fr/",
+  "secondaryUrl": "ws://ws2.ocpp.fr/",
+  "proxy": { "host": "0.0.0.0", "port": 9000 },
+  "notify": {
+    "connectedToProxy": false,
+    "disconnectedFromProxy": false,
+    "connectedToUpstream": false,
+    "disconnectedFromUpstream": false,
+    "cpStatusAvailable": false,
+    "cpStatusUnavailable": false,
+    "cpStatusFaulted": false,
+    "conStatusAvailable": false,
+    "conStatusPreparing": false,
+    "conStatusCharging": false,
+    "conStatusSuspendedEVSE": false,
+    "conStatusSuspendedEV": false,
+    "conStatusFinishing": false,
+    "conStatusReserved": false,
+    "conStatusUnavailable": false,
+    "conStatusFaulted": false,
+    "conStartTransaction": false,
+    "conStopTransaction": false
+  }
+}
