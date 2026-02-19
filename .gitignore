@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
 
 # Logs
@@ -37,3 +36,6 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Dev files
+config.dev.json
