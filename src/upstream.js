@@ -7,12 +7,13 @@ const WebSocket = require('ws')
 const { createLogger } = require('./logger')
 
 class UpstreamConnection {
-  constructor(name, baseUrl, clientId, protocol, clientIp) {
+  constructor(name, baseUrl, clientId, protocol, clientIp, forwardedHeaders) {
     this.name = name
     this.baseUrl = baseUrl
     this.clientId = clientId
     this.protocol = protocol
     this.clientIp = clientIp || null
+    this.forwardedHeaders = forwardedHeaders || {}
     this.log = createLogger(name, clientId)
     this.ws = null
     this.isConnected = false
@@ -47,16 +48,14 @@ class UpstreamConnection {
     this.log.debug(`Connecting to ${url}...`)
 
     try {
-      const options = { headers: {} }
+      const options = { headers: { ...this.forwardedHeaders } }
       if (this.clientIp) {
         options.headers['X-Forwarded-For'] = this.clientIp
         options.headers['X-Real-IP'] = this.clientIp
       }
 
       // Protocol must be passed as 2nd argument for proper WebSocket subprotocol negotiation
-      this.ws = this.protocol
-        ? new WebSocket(url, this.protocol, options)
-        : new WebSocket(url, options)
+      this.ws = new WebSocket(url, this.protocol, options)
 
       this.ws.on('open', () => {
         this.isConnected = true

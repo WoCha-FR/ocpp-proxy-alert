@@ -34,7 +34,10 @@ class OcppProxy {
         // protocols is a Set in ws library
         const protocolsArray = Array.isArray(protocols) ? protocols : Array.from(protocols)
         const ocppProtocols = protocolsArray.filter((p) => p.startsWith('ocpp'))
-        return ocppProtocols.length > 0 ? ocppProtocols[0] : false
+        if (ocppProtocols.length > 0) return ocppProtocols[0]
+        // Default to ocpp1.6 if no Sec-WebSocket-Protocol header was sent
+        if (protocolsArray.length === 0) return 'ocpp1.6'
+        return false
       },
     })
 
@@ -70,7 +73,7 @@ class OcppProxy {
       return
     }
     const clientId = match[1]
-    const protocol = clientWs.protocol || ''
+    const protocol = clientWs.protocol || 'ocpp1.6'
 
     // Create a child logger with the clientId
     const clog = createLogger('Proxy', clientId)
@@ -103,9 +106,18 @@ class OcppProxy {
 
     clog.debug(`Client IP: ${clientIp}`)
 
+    // Extract forwarded headers (Authorization, User-Agent) if present
+    const forwardedHeaders = {}
+    if (request.headers['authorization']) {
+      forwardedHeaders['Authorization'] = request.headers['authorization']
+    }
+    if (request.headers['user-agent']) {
+      forwardedHeaders['User-Agent'] = request.headers['user-agent']
+    }
+
     // Create upstream connections
     const upstreams = this.config.upstreams.map((upstreamConfig) => {
-      const upstream = new UpstreamConnection(upstreamConfig.name, upstreamConfig.url, clientId, protocol, clientIp)
+      const upstream = new UpstreamConnection(upstreamConfig.name, upstreamConfig.url, clientId, protocol, clientIp, forwardedHeaders)
       return upstream
     })
 
