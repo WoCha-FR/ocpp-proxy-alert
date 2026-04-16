@@ -1,6 +1,5 @@
 /**
- * WebSocket OCPP Proxy - Entry Point
- * Starts the proxy server with configuration
+ * WebSocket OCPP Proxy — Entry Point
  */
 
 const fs = require('fs')
@@ -10,62 +9,60 @@ const { createLogger, setLogLevel } = require('./logger')
 
 const log = createLogger('Main')
 
-// Load configuration
-const configPathDev = path.join(__dirname, '..', 'config', 'config.dev.json')
+// ─── Config loading ───────────────────────────────────────────────────────────
+
+const configPathDev  = path.join(__dirname, '..', 'config', 'config.dev.json')
 const configPathProd = path.join(__dirname, '..', 'config', 'config.json')
 const configPath = fs.existsSync(configPathDev) ? configPathDev : configPathProd
+
 let config
-
 try {
-  const configFile = fs.readFileSync(configPath, 'utf8')
-  config = JSON.parse(configFile)
-  if (config.logLevel) {
-    setLogLevel(config.logLevel)
-  }
+  config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+  if (config.logLevel) setLogLevel(config.logLevel)
   log.info(`Configuration loaded from ${configPath}`)
-} catch (error) {
-  log.error(`Failed to load configuration: ${error.message}`)
+} catch (err) {
+  log.error(`Failed to load configuration: ${err.message}`)
   process.exit(1)
 }
 
-// Validate configuration
-if (!config.proxy || !config.proxy.host || !config.proxy.port) {
-  log.error('Invalid configuration: proxy settings missing')
+// ─── Validation ───────────────────────────────────────────────────────────────
+
+if (!config.proxy?.host || !config.proxy?.port) {
+  log.error('Invalid config: proxy.host and proxy.port are required')
   process.exit(1)
 }
-
 if (!config.primaryUrl) {
-  log.error('Invalid configuration: primaryUrl is required')
+  log.error('Invalid config: primaryUrl is required')
   process.exit(1)
 }
 
-// Build upstreams array from simplified config
+// ─── Build upstreams ──────────────────────────────────────────────────────────
+
 config.upstreams = [{ name: 'PRI', url: config.primaryUrl }]
 if (config.secondaryUrl) {
   config.upstreams.push({ name: 'SEC', url: config.secondaryUrl })
 }
 
-// Create and start proxy
+// ─── Start proxy ──────────────────────────────────────────────────────────────
+
 const proxy = new OcppProxy(config)
 
 log.debug('========================================')
-log.debug('WebSocket OCPP Proxy Server')
+log.debug('WebSocket OCPP Proxy')
 log.debug('========================================')
-log.debug(`Proxy: ${config.proxy.host}:${config.proxy.port}`)
-log.debug(`Primary (PRI): ${config.primaryUrl}`)
-if (config.secondaryUrl) {
-  log.debug(`Secondary (SEC): ${config.secondaryUrl}`)
-}
-log.info('Starting server...')
+log.debug(`Proxy : ${config.proxy.host}:${config.proxy.port}`)
+log.debug(`PRI   : ${config.primaryUrl}`)
+if (config.secondaryUrl) log.debug(`SEC   : ${config.secondaryUrl}`)
 
 try {
   proxy.start()
-} catch (error) {
-  log.error(`Failed to start proxy: ${error.message}`)
+} catch (err) {
+  log.error(`Failed to start proxy: ${err.message}`)
   process.exit(1)
 }
 
-// Graceful shutdown
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+
 const shutdown = () => {
   log.info('Shutting down...')
   proxy.stop()
@@ -75,9 +72,8 @@ const shutdown = () => {
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
 
-// Error handling
-process.on('uncaughtException', (error) => {
-  log.error(`Uncaught exception: ${error}`)
+process.on('uncaughtException', (err) => {
+  log.error(`Uncaught exception: ${err}`)
   process.exit(1)
 })
 

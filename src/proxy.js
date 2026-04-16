@@ -1,6 +1,6 @@
 /**
  * WebSocket OCPP Proxy
- * Main proxy logic that handles client connections and message routing
+ * Main proxy logic: client connections, upstream management, message routing.
  */
 
 const WebSocket = require('ws')
@@ -16,12 +16,11 @@ class OcppProxy {
     this.config = config
     this.server = null
     this.notifier = null
-    this.clientConnections = new Map() // Maps client connection to its upstreams
+    this.clientConnections = new Map() // clientWs → connectionInfo
   }
 
-  /**
-   * Start the proxy server
-   */
+  // ─── Start / Stop ─────────────────────────────────────────────────────────
+
   start() {
     const { host, port } = this.config.proxy
 
@@ -30,382 +29,295 @@ class OcppProxy {
       port,
       // eslint-disable-next-line no-unused-vars
       handleProtocols: (protocols, request) => {
-        // Support OCPP protocols
-        // protocols is a Set in ws library
-        const protocolsArray = Array.isArray(protocols) ? protocols : Array.from(protocols)
-        const ocppProtocols = protocolsArray.filter((p) => p.startsWith('ocpp'))
-        if (ocppProtocols.length > 0) return ocppProtocols[0]
-        // Default to ocpp1.6 if no Sec-WebSocket-Protocol header was sent
-        if (protocolsArray.length === 0) return 'ocpp1.6'
+        const arr = Array.isArray(protocols) ? protocols : Array.from(protocols)
+        const ocpp = arr.filter((p) => p.startsWith('ocpp'))
+        if (ocpp.length > 0) return ocpp[0]
+        if (arr.length === 0) return 'ocpp1.6'
         return false
       },
     })
 
-    this.server.on('connection', (ws, request) => {
-      this.handleClientConnection(ws, request)
-    })
+    this.server.on('connection', (ws, request) => this.handleClientConnection(ws, request))
+    this.server.on('error', (error) => log.error(`Server error: ${error.message}`))
 
-    this.server.on('error', (error) => {
-      log.error(`Server error: ${error.message}`)
-    })
-
-    if (this.config.notify && this.config.notify instanceof Object) {
+    // Notifier (alerts)
+    if (this.config.notify && typeof this.config.notify === 'object') {
       this.notifier = new Notify(this.config.notify)
     } else {
-      log.warn('Notify configuration missing or invalid, notifications will be disabled')
+      log.warn('Notify config missing — notifications disabled')
     }
 
     log.info(`WebSocket proxy listening on ${host}:${port}`)
   }
 
-  /**
-   * Handle a new client connection
-   * @param {WebSocket} clientWs
-   * @param {object} request
-   */
+  stop() {
+    if (!this.server) return
+    this.clientConnections.forEach((_, ws) => this.cleanupClientConnection(ws))
+    this.server.close(() => log.info('Server stopped'))
+  }
+
+  // ─── Client connection ────────────────────────────────────────────────────
+
   handleClientConnection(clientWs, request) {
     const rawPath = request.url || '/'
-    // Extract single-level alphanumeric path (strip leading slashes and extra segments)
     const match = rawPath.replace(/^\/+/, '').match(/^([a-zA-Z0-9_-]+)$/)
+
     if (!match) {
-      log.warn(`Rejected client connection: invalid path "${rawPath}" (must be single-level alphanumeric, underscore, or hyphen)`)
-      clientWs.close(1008, 'Invalid path: must be single-level alphanumeric, underscore, or hyphen')
+      log.warn(`Rejected: invalid path "${rawPath}"`)
+      clientWs.close(1008, 'Invalid path')
       return
     }
+
     const clientId = match[1]
     const protocol = clientWs.protocol || 'ocpp1.6'
-
-    // Create a child logger with the clientId
     const clog = createLogger('Proxy', clientId)
 
-    // If a client with this ID is already connected, close the existing one
-    for (const [existingWs, connInfo] of this.clientConnections) {
-      if (connInfo.clientId === clientId) {
-        clog.warn('Client ID already in use — closing existing connection')
+    // Replace existing session with same clientId
+    for (const [existingWs, info] of this.clientConnections) {
+      if (info.clientId === clientId) {
+        clog.warn('Replacing existing connection for this clientId')
         this.cleanupClientConnection(existingWs)
-        existingWs.close(1001, 'Replaced by a new connection')
+        existingWs.close(1001, 'Replaced by new connection')
         break
       }
     }
 
-    clog.debug('========================================')
-    clog.debug(`New client connection: ${clientId}`)
-    clog.debug(`Protocol: ${protocol || 'none'}`)
-    clog.debug('========================================')
+    clog.info(`New connection — protocol: ${protocol}`)
+    this.notifier?.connectedToProxy(clientId)
 
-    // Notify about new connection
-    if (this.notifier) {
-      this.notifier.connectedToProxy(clientId)
-    }
-    // Create router for this client
-    const router = new OcppRouter(clientId)
-
-    // Determine the real client IP (support X-Forwarded-For if proxy is behind another proxy)
     const clientIp = (request.headers['x-forwarded-for'] || '').split(',')[0].trim()
       || request.socket.remoteAddress
 
-    clog.debug(`Client IP: ${clientIp}`)
-
-    // Extract forwarded headers (Authorization, User-Agent) if present
     const forwardedHeaders = {}
-    if (request.headers['authorization']) {
-      forwardedHeaders['Authorization'] = request.headers['authorization']
-    }
-    if (request.headers['user-agent']) {
-      forwardedHeaders['User-Agent'] = request.headers['user-agent']
-    }
+    if (request.headers['authorization']) forwardedHeaders['Authorization'] = request.headers['authorization']
+    if (request.headers['user-agent']) forwardedHeaders['User-Agent'] = request.headers['user-agent']
 
-    // Create upstream connections
-    const upstreams = this.config.upstreams.map((upstreamConfig) => {
-      const upstream = new UpstreamConnection(upstreamConfig.name, upstreamConfig.url, clientId, protocol, clientIp, forwardedHeaders)
-      return upstream
-    })
+    const router = new OcppRouter(clientId)
 
-    // Store connection info
+    const upstreams = this.config.upstreams.map(({ name, url }) =>
+      new UpstreamConnection(name, url, clientId, protocol, clientIp, forwardedHeaders)
+    )
+
     const connectionInfo = {
+      clientId,
       clientWs,
       upstreams,
       router,
-      clientId,
       protocol,
-      messageBuffer: [], // Buffer for messages received before upstreams are ready
+      messageBuffer: [],
     }
     this.clientConnections.set(clientWs, connectionInfo)
 
-    // Set up upstream message handlers
+    // Wire upstream events
     upstreams.forEach((upstream) => {
       upstream.onMessage((data, serverName) => {
         this.handleUpstreamMessage(clientWs, data, serverName, router)
       })
 
       upstream.onConnected((serverName) => {
-        // When an upstream connects, send buffered messages to it
-        // and flush the buffer once all upstreams are connected
         this.sendBufferToUpstream(clientWs, upstream)
         this.flushMessageBufferIfAllConnected(clientWs)
-        if (this.notifier) {
-          this.notifier.connectedToUpstream(clientId, serverName)
-        }
+        this.notifier?.connectedToUpstream(clientId, serverName)
       })
 
       upstream.onDisconnected((serverName) => {
         this.checkUpstreamsStatus(clientWs)
-        if (this.notifier) {
-          this.notifier.disconnectedFromUpstream(clientId, serverName)
-        }
+        this.notifier?.disconnectedFromUpstream(clientId, serverName)
       })
 
-      // eslint-disable-next-line no-unused-vars
-      upstream.onGaveUp((serverName) => {
+      upstream.onGaveUp(() => {
         this.flushMessageBufferIfAllConnected(clientWs)
         this.checkUpstreamsStatus(clientWs)
       })
 
-      // Connect to upstream
       upstream.connect()
     })
 
-    // Handle client messages
+    // Wire client events
     clientWs.on('message', (data) => {
       const msg = data.toString()
-      const connInfo = this.clientConnections.get(clientWs)
+      const info = this.clientConnections.get(clientWs)
 
-      // If no upstream is connected yet, buffer the message
-      if (connInfo && !upstreams.some((u) => u.isConnected)) {
-        clog.info(`No upstream connected yet, buffering message (${connInfo.messageBuffer.length + 1} in buffer)`)
-        connInfo.messageBuffer.push(msg)
+      if (info && !upstreams.some((u) => u.isConnected)) {
+        clog.info(`Buffering message (${info.messageBuffer.length + 1} in buffer)`)
+        info.messageBuffer.push(msg)
         return
       }
 
       this.handleClientMessage(clientWs, msg, upstreams, router)
     })
 
-    // Handle client disconnection
     clientWs.on('close', () => {
       clog.info('Client disconnected')
-      if (this.notifier) {
-        this.notifier.disconnectedFromProxy(clientId)
-      }
+      this.notifier?.disconnectedFromProxy(clientId)
       this.cleanupClientConnection(clientWs)
     })
 
-    clientWs.on('error', (error) => {
-      clog.error(`Client error: ${error.message}`)
-    })
+    clientWs.on('error', (error) => clog.error(`Client error: ${error.message}`))
   }
 
+  // ─── Message routing ──────────────────────────────────────────────────────
+
   /**
-   * Handle a message from the client
-   * @param {WebSocket} clientWs
-   * @param {string} data
-   * @param {Array} upstreams
-   * @param {OcppRouter} router
+   * Message from client → route to upstreams.
+   *
+   * type 2 (CALL)         → broadcast to all connected upstreams
+   * type 3/4 (reply)      → send deprefixed frame to the matching upstream
    */
   handleClientMessage(clientWs, data, upstreams, router) {
-    const connectionInfo = this.clientConnections.get(clientWs)
-    const clog = createLogger('Proxy', connectionInfo ? connectionInfo.clientId : '?')
+    const info = this.clientConnections.get(clientWs)
+    const clog = createLogger('Proxy', info?.clientId ?? '?')
     const message = router.parseMessage(data)
 
     if (!message) {
-      clog.warn('Received invalid message from client, ignoring')
+      clog.warn('Invalid message from client — ignoring')
       return
     }
 
     const routing = router.routeClientMessage(message)
 
     if (routing.sendToAll) {
-      // Register client CALL so we can filter responses later
       if (message.type === 2) {
         router.registerClientCall(message.messageId)
-        if (this.notifier) {
-          this.notifier.callFromClient(connectionInfo.clientId, data)
-        }
+        this.notifier?.callFromClient(info?.clientId, data)
       }
-      // Send to all upstream servers
+
       upstreams.forEach((upstream) => {
         if (upstream.isConnected) {
           upstream.send(data)
         } else {
-          clog.warn(`Cannot send to ${upstream.name} - not connected`)
+          clog.warn(`Cannot send to ${upstream.name} — not connected`)
         }
       })
     } else if (routing.sendToServer) {
-      // Send to specific server
-      const targetUpstream = upstreams.find((u) => u.name === routing.sendToServer)
-      if (targetUpstream && targetUpstream.isConnected) {
-        targetUpstream.send(data)
+      // For CALLRESULT/CALLERROR: send the deprefixed frame, not the raw one
+      const frameToSend = routing.remappedData ?? data
+      const target = upstreams.find((u) => u.name === routing.sendToServer)
+
+      if (target?.isConnected) {
+        target.send(frameToSend)
       } else {
-        clog.warn(`Target server ${routing.sendToServer} not found or not connected`)
+        clog.warn(`Target ${routing.sendToServer} not found or not connected`)
       }
     }
   }
 
   /**
-   * Handle a message from an upstream server
-   * @param {WebSocket} clientWs
-   * @param {string} data
-   * @param {string} serverName
-   * @param {OcppRouter} router
+   * Message from upstream → forward to client.
+   *
+   * type 2 (CALL)         → remap ID (PRI~abc / SEC~abc) then send
+   * type 3/4 (response)   → relay only if from primary (for client-originated CALLs)
    */
   handleUpstreamMessage(clientWs, data, serverName, router) {
+    const info = this.clientConnections.get(clientWs)
     const message = router.parseMessage(data)
 
-    if (message) {
-      router.handleServerMessage(message, serverName)
-    }
+    if (!message) return
 
-    // For CALLRESULT/CALLERROR responses to client-originated CALLs,
-    // only relay the response from the primary server (first upstream)
-    if (message && (message.type === 3 || message.type === 4)) {
-      const connectionInfo = this.clientConnections.get(clientWs)
-      const primaryServerName = connectionInfo ? connectionInfo.upstreams[0].name : null
+    let frameToClient = data
 
-      if (!router.shouldRelayResponseToClient(message.messageId, serverName, primaryServerName)) {
-        return // Drop this response (not from primary server)
+    if (message.type === 2) {
+      // CALL from upstream: remap ID to avoid PRI/SEC collision on the client side
+      frameToClient = router.remapServerCall(message, serverName)
+    } else if (message.type === 3 || message.type === 4) {
+      // Response to a client-originated CALL: only relay from primary
+      const primaryName = info?.upstreams[0]?.name ?? null
+
+      if (!router.shouldRelayResponseToClient(message.messageId, serverName, primaryName)) {
+        return
       }
+      // frameToClient stays as-is (id is the original client id)
     }
 
-    // Relay to client
     if (clientWs.readyState === WebSocket.OPEN) {
       try {
-        clientWs.send(data)
+        clientWs.send(frameToClient)
       } catch (error) {
-        const connInfo = this.clientConnections.get(clientWs)
-        const clog = createLogger('Proxy', connInfo ? connInfo.clientId : '?')
-        clog.error(`Error sending to client: ${error.message}`)
+        createLogger('Proxy', info?.clientId ?? '?').error(`Send error: ${error.message}`)
       }
     }
   }
 
+  // ─── Buffer management ────────────────────────────────────────────────────
+
   /**
-   * Send buffered messages to an upstream that just connected.
-   * For the primary server (first in config), route through handleClientMessage
-   * so that CALL registrations happen in the router.
-   * For secondary servers, send raw messages directly.
-   * @param {WebSocket} clientWs
-   * @param {UpstreamConnection} upstream
+   * When an upstream connects, replay the buffer to it.
+   * - Primary:   route through handleClientMessage (registers CALLs in router)
+   * - Secondary: send raw (PRI already registered the CALLs)
    */
   sendBufferToUpstream(clientWs, upstream) {
-    const connectionInfo = this.clientConnections.get(clientWs)
-    if (!connectionInfo || connectionInfo.messageBuffer.length === 0) {
-      return
-    }
+    const info = this.clientConnections.get(clientWs)
+    if (!info || info.messageBuffer.length === 0) return
 
-    const { upstreams, router, clientId } = connectionInfo
+    const { upstreams, router, clientId } = info
     const clog = createLogger('Proxy', clientId)
-    const primaryServer = upstreams[0]
+    const isPrimary = upstream === upstreams[0]
 
-    if (upstream === primaryServer) {
-      // Primary server — route through handleClientMessage
-      // so CALL registrations happen in the router
-      clog.info(
-        `Primary server connected (${upstream.name}) — routing ${connectionInfo.messageBuffer.length} buffered message(s) through router`
-      )
-      const messages = [...connectionInfo.messageBuffer]
+    if (isPrimary) {
+      clog.info(`PRI connected — routing ${info.messageBuffer.length} buffered message(s) through router`)
+      const messages = [...info.messageBuffer]
       for (const msg of messages) {
         this.handleClientMessage(clientWs, msg, upstreams, router)
       }
     } else {
-      // Secondary server — send raw messages directly
-      clog.info(`Sending ${connectionInfo.messageBuffer.length} buffered message(s) to ${upstream.name}`)
-      for (const msg of connectionInfo.messageBuffer) {
+      clog.info(`Sending ${info.messageBuffer.length} buffered message(s) to ${upstream.name}`)
+      for (const msg of info.messageBuffer) {
         upstream.send(msg)
       }
     }
   }
 
   /**
-   * Clear the message buffer once all upstreams are connected
-   * @param {WebSocket} clientWs
+   * Clear the buffer once all upstreams are resolved (connected or gave up).
    */
   flushMessageBufferIfAllConnected(clientWs) {
-    const connectionInfo = this.clientConnections.get(clientWs)
-    if (!connectionInfo || connectionInfo.messageBuffer.length === 0) {
-      return
-    }
+    const info = this.clientConnections.get(clientWs)
+    if (!info || info.messageBuffer.length === 0) return
 
-    const { upstreams, clientId } = connectionInfo
-    // Consider an upstream "done" if it's connected or has exhausted reconnection attempts
-    const allResolved = upstreams.every((u) => u.isConnected || u.reconnectAttempts >= u.maxReconnectAttempts)
+    const allResolved = info.upstreams.every(
+      (u) => u.isConnected || u.reconnectAttempts >= u.maxReconnectAttempts
+    )
 
     if (allResolved) {
-      const clog = createLogger('Proxy', clientId)
-      clog.info(`All upstreams connected — clearing message buffer (${connectionInfo.messageBuffer.length} message(s))`)
-      connectionInfo.messageBuffer = []
+      createLogger('Proxy', info.clientId).info(`All upstreams resolved — clearing buffer (${info.messageBuffer.length} messages)`)
+      info.messageBuffer = []
     }
   }
 
-  /**
-   * Check if both upstreams are disconnected, close client if so
-   * @param {WebSocket} clientWs
-   */
+  // ─── Upstream health ──────────────────────────────────────────────────────
+
   checkUpstreamsStatus(clientWs) {
-    const connectionInfo = this.clientConnections.get(clientWs)
-    if (!connectionInfo) {
-      return
-    }
+    const info = this.clientConnections.get(clientWs)
+    if (!info) return
 
-    const { upstreams } = connectionInfo
-    const clog = createLogger('Proxy', connectionInfo.clientId)
+    const clog = createLogger('Proxy', info.clientId)
 
-    // Don't close the client if some upstreams are still attempting their initial connection
-    const someStillConnecting = upstreams.some(
+    const someStillConnecting = info.upstreams.some(
       (u) => !u.isConnected && !u.wasEverConnected && u.reconnectAttempts < u.maxReconnectAttempts
     )
     if (someStillConnecting) {
-      clog.info('Some upstream servers still attempting initial connection, keeping client alive')
+      clog.info('Some upstreams still connecting — keeping client alive')
       return
     }
 
-    const allDisconnected = upstreams.every((u) => !u.isConnected)
-
-    if (allDisconnected) {
-      clog.info('All upstream servers disconnected - closing client connection')
+    if (info.upstreams.every((u) => !u.isConnected)) {
+      clog.info('All upstreams disconnected — closing client')
       clientWs.close(1001, 'All upstream servers unavailable')
       this.cleanupClientConnection(clientWs)
     }
   }
 
-  /**
-   * Clean up resources for a client connection
-   * @param {WebSocket} clientWs
-   */
+  // ─── Cleanup ──────────────────────────────────────────────────────────────
+
   cleanupClientConnection(clientWs) {
-    const connectionInfo = this.clientConnections.get(clientWs)
-    if (!connectionInfo) {
-      return
-    }
+    const info = this.clientConnections.get(clientWs)
+    if (!info) return
 
-    const { upstreams, router } = connectionInfo
-
-    // Close all upstream connections
-    upstreams.forEach((upstream) => {
-      upstream.close()
-    })
-
-    // Clear router state
-    router.clear()
-
-    // Remove from map
+    info.upstreams.forEach((u) => u.close())
+    info.router.clear()
     this.clientConnections.delete(clientWs)
 
-    createLogger('Proxy', connectionInfo.clientId).info('Client connection cleanup complete')
-  }
-
-  /**
-   * Stop the proxy server
-   */
-  stop() {
-    if (this.server) {
-      // Clean up all client connections
-      this.clientConnections.forEach((_, clientWs) => {
-        this.cleanupClientConnection(clientWs)
-      })
-
-      this.server.close(() => {
-        log.info('Server stopped')
-      })
-    }
+    createLogger('Proxy', info.clientId).info('Connection cleanup complete')
   }
 }
 
